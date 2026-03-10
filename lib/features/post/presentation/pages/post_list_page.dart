@@ -3,6 +3,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../bloc/post_bloc.dart';
 import '../../domain/entities/post.dart';
+import '../../../../core/network/api_client.dart';
+import '../../data/datasources/post_local_datasource.dart';
+import '../../data/datasources/post_remote_datasource.dart';
+import '../../data/repositories/post_repository_impl.dart';
 import 'post_create_page.dart';
 import 'post_detail_page.dart';
 
@@ -21,7 +25,14 @@ class _PostListPageState extends State<PostListPage> {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => PostBloc()..add(LoadPosts()),
+      create: (_) {
+        final dio = ApiClient.create();
+        final repository = PostRepositoryImpl(
+          remote: PostRemoteDataSource(dio),
+          local: PostLocalDataSource(),
+        );
+        return PostBloc(repository: repository)..add(LoadPosts());
+      },
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Knock'),
@@ -68,7 +79,7 @@ class _PostListPageState extends State<PostListPage> {
                       : ListView.separated(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                           itemCount: reversed.length,
-                          separatorBuilder: (_, __) =>
+                          separatorBuilder: (context, _) =>
                               const SizedBox(height: 12),
                           itemBuilder: (context, i) {
                             final Post p = reversed[i];

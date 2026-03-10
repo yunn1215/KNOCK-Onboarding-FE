@@ -3,6 +3,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/entities/post.dart';
 import '../bloc/post_bloc.dart';
 import '../bloc/post_detail_bloc.dart';
+import '../../../../core/network/api_client.dart';
+import '../../data/datasources/reply_local_datasource.dart';
+import '../../data/datasources/reply_remote_datasource.dart';
+import '../../data/repositories/reply_repository_impl.dart';
 
 class PostDetailPage extends StatelessWidget {
   final Post post;
@@ -11,103 +15,152 @@ class PostDetailPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => PostDetailBloc(post),
-      child: const _PostDetailView(),
+      create: (_) {
+        final dio = ApiClient.create();
+        final replyRepository = ReplyRepositoryImpl(
+          remote: ReplyRemoteDataSource(dio),
+          local: ReplyLocalDataSource(),
+        );
+        return PostDetailBloc(replyRepository: replyRepository, post: post);
+      },
+      child: _PostDetailView(post: post),
     );
   }
 }
 
-class _PostDetailView extends StatelessWidget {
-  const _PostDetailView();
+class _PostDetailView extends StatefulWidget {
+  final Post post;
+  const _PostDetailView({required this.post});
+
+  @override
+  State<_PostDetailView> createState() => _PostDetailViewState();
+}
+
+class _PostDetailViewState extends State<_PostDetailView> {
+  final _scrollCtrl = ScrollController();
+  final _replyCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(() {
+      final position = _scrollCtrl.position;
+      final max = position.maxScrollExtent;
+      final now = position.pixels;
+      if (now >= 80 && max - now < 240) {
+        context.read<PostDetailBloc>().add(LoadReplies());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    _replyCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<PostDetailBloc, PostDetailState>(
-      builder: (context, state) {
-        final detailBloc = context.read<PostDetailBloc>();
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(state.isEditing ? '게시글 수정' : '게시글 상세'),
-            actions: [
-              if (state.isMine && !state.isEditing)
-                IconButton(
-                  icon: const Icon(Icons.edit),
-                  onPressed: () => detailBloc.add(ToggleEditMode()),
-                ),
-
-              if (state.isMine && state.isEditing)
-                TextButton(
-                  onPressed: () {
-                    final updated = Post(
-                      id: state.post.id,
-                      title: state.title.trim(),
-                      content: state.content.trim(),
-                      type: state.type,
-                      author: state.post.author,
-                      createdAt: state.post.createdAt,
-                    );
-
-                    if (updated.title.isEmpty || updated.content.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('제목/내용을 입력해줘')),
-                      );
-                      return;
-                    }
-
-                    // ✅ 수정 반영
-                    context.read<PostBloc>().add(
-                      UpdatePost(updated, requester: 'me'),
-                    );
-
-                    // ✅ 상세 화면 최신 내용 반영 + 편집 종료
-                    detailBloc.add(InitPostDetail(updated));
-                    detailBloc.add(ToggleEditMode());
-                  },
-                  child: const Text('저장'),
-                ),
-
-              // 삭제는 요구사항이니 같이 넣자(작성자만 + 확인 다이얼로그)
-              if (state.isMine && !state.isEditing)
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () async {
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('삭제할까요?'),
-                        content: const Text('삭제하면 되돌릴 수 없어요.'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('취소'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text('삭제'),
-                          ),
-                        ],
-                      ),
-                    );
-
-                    if (ok == true) {
-                      context.read<PostBloc>().add(
-                        DeletePost(state.post.id, requester: 'me'),
-                      );
-                      Navigator.pop(context);
-                    }
-                  },
-                ),
-            ],
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(16),
-            child: state.isEditing
-                ? _EditForm(state: state)
-                : SingleChildScrollView(child: _DetailView(state: state)),
-          ),
+    return BlocListener<PostDetailBloc, PostDetailState>(
+      listenWhen: (prev, next) => prev.message != next.message && next.message != null,
+      listener: (context, state) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(state.message!)),
         );
+        context.read<PostDetailBloc>().add(ClearMessage());
       },
+      child: BlocBuilder<PostDetailBloc, PostDetailState>(
+        builder: (context, state) {
+          final detailBloc = context.read<PostDetailBloc>();
+
+          return Scaffold(
+            appBar: AppBar(
+              title: Text(state.isEditing ? '게시글 수정' : '게시글 상세'),
+              actions: [
+                if (state.isMine && !state.isEditing)
+                  IconButton(
+                    icon: const Icon(Icons.edit),
+                    onPressed: () => detailBloc.add(ToggleEditMode()),
+                  ),
+
+                if (state.isMine && state.isEditing)
+                  TextButton(
+                    onPressed: () {
+                      final updated = Post(
+                        id: state.post.id,
+                        title: state.title.trim(),
+                        content: state.content.trim(),
+                        type: state.type,
+                        author: state.post.author,
+                        createdAt: state.post.createdAt,
+                      );
+
+                      if (updated.title.isEmpty || updated.content.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('제목/내용을 입력해줘')),
+                        );
+                        return;
+                      }
+
+                      context.read<PostBloc>().add(UpdatePost(updated, requester: 'me'));
+                      detailBloc.add(InitPostDetail(updated));
+                      detailBloc.add(ToggleEditMode());
+                    },
+                    child: const Text('저장'),
+                  ),
+
+                if (state.isMine && !state.isEditing)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      final ok = await showDialog<bool>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('삭제할까요?'),
+                          content: const Text('삭제하면 되돌릴 수 없어요.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('취소'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('삭제'),
+                            ),
+                          ],
+                        ),
+                      );
+
+                    if (!context.mounted) return;
+                      if (ok == true) {
+                        context.read<PostBloc>().add(DeletePost(state.post.id, requester: 'me'));
+                        Navigator.pop(context);
+                      }
+                    },
+                  ),
+              ],
+            ),
+            body: Padding(
+              padding: const EdgeInsets.all(16),
+              child: state.isEditing
+                  ? _EditForm(state: state)
+                  : ListView(
+                      controller: _scrollCtrl,
+                      children: [
+                        _DetailView(state: state),
+                        const SizedBox(height: 16),
+                        _ReplySection(
+                          state: state,
+                          replyCtrl: _replyCtrl,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -158,6 +211,182 @@ class _DetailView extends StatelessWidget {
           ),
           const Divider(height: 30),
           Text(state.post.content, style: const TextStyle(fontSize: 16)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReplySection extends StatelessWidget {
+  final PostDetailState state;
+  final TextEditingController replyCtrl;
+
+  const _ReplySection({required this.state, required this.replyCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final bloc = context.read<PostDetailBloc>();
+
+    final isEditingReply = state.editingReplyId != null;
+    if (isEditingReply && replyCtrl.text != state.editingReplyContent) {
+      // 편집 모드에서는 입력창을 편집 내용과 동기화
+      replyCtrl.value = TextEditingValue(
+        text: state.editingReplyContent,
+        selection: TextSelection.collapsed(offset: state.editingReplyContent.length),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+            blurRadius: 12,
+            offset: Offset(0, 6),
+            color: Color(0x11000000),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '댓글 ${state.replies.length}',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              if (state.isRepliesLoading)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              IconButton(
+                tooltip: '새로고침',
+                onPressed: () => bloc.add(LoadReplies(reset: true)),
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          if (state.replies.isEmpty && !state.isRepliesLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('첫 댓글을 남겨보세요.'),
+            ),
+
+          ...state.replies.map((reply) {
+            final isMine = reply.author == 'me';
+            return ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(reply.author),
+              subtitle: Text(reply.content),
+              trailing: isMine
+                  ? PopupMenuButton<String>(
+                      onSelected: (v) async {
+                        if (v == 'edit') {
+                          bloc.add(StartEditReply(reply));
+                        } else if (v == 'delete') {
+                          final ok = await showDialog<bool>(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('댓글 삭제'),
+                              content: const Text('삭제하면 되돌릴 수 없어요.'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, false),
+                                  child: const Text('취소'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text('삭제'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (!context.mounted) return;
+                          if (ok == true) bloc.add(DeleteReply(reply.id));
+                        }
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'edit', child: Text('수정')),
+                        PopupMenuItem(value: 'delete', child: Text('삭제')),
+                      ],
+                    )
+                  : null,
+            );
+          }),
+
+          if (!state.hasMoreReplies && state.replies.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('마지막 댓글입니다.', style: TextStyle(color: Colors.grey)),
+            ),
+
+          const SizedBox(height: 12),
+          if (isEditingReply)
+            Row(
+              children: [
+                const Icon(Icons.edit, size: 18, color: Colors.deepPurple),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text('댓글 수정 모드', style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    replyCtrl.clear();
+                    bloc.add(CancelEditReply());
+                  },
+                  child: const Text('취소'),
+                ),
+              ],
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: replyCtrl,
+                  minLines: 1,
+                  maxLines: 4,
+                  decoration: InputDecoration(
+                    hintText: isEditingReply ? '댓글 수정' : '댓글 입력',
+                    border: const OutlineInputBorder(),
+                  ),
+                  onChanged: (v) {
+                    if (isEditingReply) bloc.add(ChangeEditingReplyContent(v));
+                  },
+                  onSubmitted: (_) {
+                    if (isEditingReply) {
+                      bloc.add(SubmitUpdateReply());
+                    } else {
+                      bloc.add(CreateReply(replyCtrl.text));
+                    }
+                    replyCtrl.clear();
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: state.isReplyActionLoading
+                    ? null
+                    : () {
+                        if (isEditingReply) {
+                          bloc.add(SubmitUpdateReply());
+                        } else {
+                          bloc.add(CreateReply(replyCtrl.text));
+                        }
+                        replyCtrl.clear();
+                      },
+                child: Text(isEditingReply ? '수정' : '등록'),
+              ),
+            ],
+          ),
         ],
       ),
     );

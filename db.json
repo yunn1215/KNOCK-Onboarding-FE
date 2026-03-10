@@ -1,0 +1,48 @@
+{
+  "posts": [
+    {
+      "id": 1,
+      "title": "첫 게시글",
+      "content": "안녕하세요",
+      "type": "post",
+      "author": "me",
+      "createdAt": "2026-03-08"
+    },
+    {
+      "id": 2,
+      "title": "질문 있어요",
+      "content": "BLoC 패턴 추천해주실 분?",
+      "type": "question",
+      "author": "other",
+      "createdAt": "2026-03-09"
+    },
+    {
+      "id": 3,
+      "title": "회의 공지",
+      "content": "내일 2시 킥오프입니다.",
+      "type": "post",
+      "author": "me",
+      "createdAt": "2026-03-10"
+    }
+  ],
+  "replies": [
+    { "id": 1, "postId": 1, "content": "첫 댓글입니다.", "author": "user1" },
+    { "id": 2, "postId": 1, "content": "저도 궁금해요.", "author": "user2" },
+    { "id": 3, "postId": 1, "content": "좋은 글 감사합니다.", "author": "me" },
+    { "id": 4, "postId": 1, "content": "다른 사람 댓글이라 수정/삭제 안 보여야 함", "author": "other" },
+    { "id": 5, "postId": 1, "content": "댓글 5번째.", "author": "user1" },
+    { "id": 6, "postId": 1, "content": "이것도 내 댓글 — 수정/삭제 보여야 함", "author": "me" },
+    { "id": 7, "postId": 1, "content": "일곱 번째 댓글.", "author": "user2" },
+    { "id": 8, "postId": 1, "content": "여덟 번째.", "author": "other" },
+    { "id": 9, "postId": 1, "content": "아홉 번째.", "author": "user1" },
+    { "id": 10, "postId": 1, "content": "열 번째 댓글 (1페이지 마지막).", "author": "me" },
+    { "id": 11, "postId": 1, "content": "11번 — 스크롤하면 2페이지로 로드됨", "author": "user1" },
+    { "id": 12, "postId": 1, "content": "12번 댓글.", "author": "user2" },
+    { "id": 13, "postId": 1, "content": "13번.", "author": "me" },
+    { "id": 14, "postId": 1, "content": "14번.", "author": "other" },
+    { "id": 15, "postId": 1, "content": "15번 댓글 (페이지네이션 테스트용).", "author": "user1" },
+    { "id": 16, "postId": 2, "content": "두 번째 글 댓글 1.", "author": "user1" },
+    { "id": 17, "postId": 2, "content": "두 번째 글 댓글 2 — 내 댓글.", "author": "me" },
+    { "id": 18, "postId": 2, "content": "두 번째 글 댓글 3.", "author": "other" }
+  ]
+}

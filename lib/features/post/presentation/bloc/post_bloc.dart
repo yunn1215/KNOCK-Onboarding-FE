@@ -2,6 +2,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/entities/post.dart';
 import '../../data/datasources/post_local_datasource.dart';
 import '../../data/models/post_model.dart';
+import '../../domain/repositories/post_repository.dart';
 
 /// ---------------- EVENTS ----------------
 
@@ -15,7 +16,7 @@ class AddPost extends PostEvent {
 }
 
 class DeletePost extends PostEvent {
-  final String id;
+  final int id;
   final String requester; // 삭제 시도
   DeletePost(this.id, {required this.requester});
 }
@@ -40,9 +41,12 @@ class PostLoaded extends PostState {
 /// ---------------- BLOC ----------------
 
 class PostBloc extends Bloc<PostEvent, PostState> {
-  final PostLocalDataSource dataSource = PostLocalDataSource();
+  final PostRepository repository;
+  final PostLocalDataSource localDataSource;
 
-  PostBloc() : super(PostInitial()) {
+  PostBloc({required this.repository, PostLocalDataSource? localDataSource})
+    : localDataSource = localDataSource ?? PostLocalDataSource(),
+      super(PostInitial()) {
     on<LoadPosts>(_onLoadPosts);
     on<AddPost>(_onAddPost);
     on<DeletePost>(_onDeletePost);
@@ -50,41 +54,8 @@ class PostBloc extends Bloc<PostEvent, PostState> {
   }
 
   Future<void> _onLoadPosts(LoadPosts event, Emitter<PostState> emit) async {
-    final posts = await dataSource.getPosts();
-
-    // ✅ 첫 실행(저장된 글이 없을 때)만 목데이터 넣고 저장
-    if (posts.isEmpty) {
-      final seed = [
-        PostModel(
-          id: '1',
-          title: 'Knock 온보딩 미션 질문 있어요',
-          content: 'BLoC 구조를 어떻게 잡는 게 제일 깔끔할까요?',
-          type: 'question',
-          author: 'other',
-          createdAt: DateTime.now().subtract(const Duration(hours: 3)),
-        ),
-        PostModel(
-          id: '2',
-          title: '게시글 예시: 회의 공지',
-          content: '내일 2시에 킥오프 있습니다. 참여 부탁드려요!',
-          type: 'post',
-          author: 'me',
-          createdAt: DateTime.now().subtract(const Duration(days: 1)),
-        ),
-        PostModel(
-          id: '3',
-          title: '질문: shared_preferences 말고 뭐 써요?',
-          content: '로컬 저장소는 보통 Hive/Isar도 많이 쓰나요?',
-          type: 'question',
-          author: 'other',
-          createdAt: DateTime.now().subtract(const Duration(days: 2)),
-        ),
-      ];
-
-      await dataSource.savePosts(seed);
-      emit(PostLoaded(seed));
-      return;
-    }
+    final posts = await repository.getPosts();
+  
 
     emit(PostLoaded(posts));
   }
@@ -93,23 +64,8 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     final currentState = state;
 
     if (currentState is PostLoaded) {
-      final updatedList = List<Post>.from(currentState.posts)..add(event.post);
-
-      await dataSource.savePosts(
-        updatedList
-            .map(
-              (e) => PostModel(
-                id: e.id,
-                title: e.title,
-                content: e.content,
-                type: e.type,
-                author: e.author,
-                createdAt: e.createdAt,
-              ),
-            )
-            .toList(),
-      );
-
+      final created = await repository.createPost(event.post);
+      final updatedList = List<Post>.from(currentState.posts)..add(created);
       emit(PostLoaded(updatedList));
     }
   }
@@ -121,27 +77,14 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     final target = currentState.posts.where((p) => p.id == event.id).toList();
     if (target.isEmpty) return;
 
-    // ✅ 작성자만 삭제 가능
+    // 작성자만 삭제 가능
     if (target.first.author != event.requester) return;
 
     final updatedList = currentState.posts
         .where((p) => p.id != event.id)
         .toList();
 
-    await dataSource.savePosts(
-      updatedList
-          .map(
-            (e) => PostModel(
-              id: e.id,
-              title: e.title,
-              content: e.content,
-              type: e.type,
-              author: e.author,
-              createdAt: e.createdAt,
-            ),
-          )
-          .toList(),
-    );
+    await repository.deletePost(event.id);
 
     emit(PostLoaded(updatedList));
   }
@@ -153,27 +96,13 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     final idx = currentState.posts.indexWhere((p) => p.id == event.post.id);
     if (idx == -1) return;
 
-    // ✅ 작성자만 수정 가능
+    // 작성자만 수정 가능
     final old = currentState.posts[idx];
     if (old.author != event.requester) return;
 
     final updatedList = List<Post>.from(currentState.posts);
-    updatedList[idx] = event.post;
-
-    await dataSource.savePosts(
-      updatedList
-          .map(
-            (e) => PostModel(
-              id: e.id,
-              title: e.title,
-              content: e.content,
-              type: e.type,
-              author: e.author,
-              createdAt: e.createdAt,
-            ),
-          )
-          .toList(),
-    );
+    final updated = await repository.updatePost(event.post);
+    updatedList[idx] = updated;
 
     emit(PostLoaded(updatedList));
   }

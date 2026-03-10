@@ -22,5 +22,31 @@ class PostLocalDataSource {
 
     await prefs.setString(key, jsonString);
   }
+
+  Future<PostModel?> getPost(int id) async {
+    final posts = await getPosts();
+    try {
+      return posts.firstWhere((p) => p.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> upsertPost(PostModel post) async {
+    final posts = await getPosts();
+    final idx = posts.indexWhere((p) => p.id == post.id);
+    if (idx == -1) {
+      posts.add(post);
+    } else {
+      posts[idx] = post;
+    }
+    await savePosts(posts);
+  }
+
+  Future<void> deletePost(int id) async {
+    final posts = await getPosts();
+    final updated = posts.where((p) => p.id != id).toList();
+    await savePosts(updated);
+  }
 }
 

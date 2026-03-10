@@ -34,7 +34,7 @@ class _PostCreatePageState extends State<PostCreatePage> {
     }
 
     final post = Post(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      id: DateTime.now().microsecondsSinceEpoch,
       title: title,
       content: content,
       type: _type, // post | question
