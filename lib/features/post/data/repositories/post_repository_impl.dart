@@ -41,6 +41,7 @@ class PostRepositoryImpl implements PostRepository {
       type: post.type,
       author: post.author,
       createdAt: post.createdAt,
+      imageUrl: post.imageUrl,
     );
 
     try {
@@ -55,20 +56,33 @@ class PostRepositoryImpl implements PostRepository {
 
   @override
   Future<Post> updatePost(Post post) async {
-    final model = PostModel(
-      id: post.id,
-      title: post.title,
-      content: post.content,
-      type: post.type,
-      author: post.author,
-      createdAt: post.createdAt,
-    );
-
     try {
+      final current = await remote.getPost(post.id);
+      final model = PostModel(
+        id: post.id,
+        title: post.title,
+        content: post.content,
+        type: post.type,
+        author: post.author,
+        createdAt: post.createdAt,
+        likeCount: current.likeCount,
+        isLikedByMe: current.isLikedByMe,
+        imageUrl: post.imageUrl,
+        likedBy: current.likedBy,
+      );
       final updated = await remote.updatePost(model);
       await local.upsertPost(updated);
       return updated;
     } catch (_) {
+      final model = PostModel(
+        id: post.id,
+        title: post.title,
+        content: post.content,
+        type: post.type,
+        author: post.author,
+        createdAt: post.createdAt,
+        imageUrl: post.imageUrl,
+      );
       await local.upsertPost(model);
       return model;
     }
@@ -83,6 +97,20 @@ class PostRepositoryImpl implements PostRepository {
     } finally {
       await local.deletePost(id);
     }
+  }
+
+  @override
+  Future<Post> likePost(int id) async {
+    final updated = await remote.likePost(id);
+    await local.upsertPost(updated);
+    return updated;
+  }
+
+  @override
+  Future<Post> unlikePost(int id) async {
+    final updated = await remote.unlikePost(id);
+    await local.upsertPost(updated);
+    return updated;
   }
 }
 

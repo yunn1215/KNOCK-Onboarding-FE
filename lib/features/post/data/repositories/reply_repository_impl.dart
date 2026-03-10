@@ -11,15 +11,19 @@ class ReplyRepositoryImpl implements ReplyRepository {
   ReplyRepositoryImpl({required this.remote, required this.local});
 
   @override
-  Future<List<Reply>> getReplies({required int postId, required int page}) async {
+  Future<(List<Reply>, int?)> getReplies(
+      {required int postId, required int page}) async {
     try {
-      final replies = await remote.getReplies(postId, page);
+      final (replies, total) = await remote.getReplies(postId, page);
       for (final r in replies) {
         await local.upsertReply(r);
       }
-      return replies;
+      return (replies, total);
     } catch (_) {
-      return await local.getReplies(postId: postId, page: page);
+      final list =
+          await local.getReplies(postId: postId, page: page);
+      final count = await local.getReplyCount(postId);
+      return (list, count);
     }
   }
 
@@ -30,6 +34,7 @@ class ReplyRepositoryImpl implements ReplyRepository {
       postId: reply.postId,
       content: reply.content,
       author: reply.author,
+      createdAt: reply.createdAt ?? DateTime.now(),
     );
     try {
       await remote.createReply(model);
@@ -59,6 +64,9 @@ class ReplyRepositoryImpl implements ReplyRepository {
       postId: reply.postId,
       content: reply.content,
       author: reply.author,
+      likeCount: reply.likeCount,
+      isLikedByMe: reply.isLikedByMe,
+      createdAt: reply.createdAt,
     );
     try {
       await remote.updateReply(model);
@@ -68,6 +76,20 @@ class ReplyRepositoryImpl implements ReplyRepository {
       await local.upsertReply(model);
       return model;
     }
+  }
+
+  @override
+  Future<Reply> likeReply(int id) async {
+    final updated = await remote.likeReply(id);
+    await local.upsertReply(updated);
+    return updated;
+  }
+
+  @override
+  Future<Reply> unlikeReply(int id) async {
+    final updated = await remote.unlikeReply(id);
+    await local.upsertReply(updated);
+    return updated;
   }
 }
 

@@ -1,12 +1,18 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../domain/entities/post.dart';
-import '../bloc/post_bloc.dart';
-import '../bloc/post_detail_bloc.dart';
+import 'package:image_picker/image_picker.dart';
+
 import '../../../../core/network/api_client.dart';
+import '../../../../core/utils/date_format.dart';
+import '../../../../core/widgets/post_image.dart';
 import '../../data/datasources/reply_local_datasource.dart';
 import '../../data/datasources/reply_remote_datasource.dart';
 import '../../data/repositories/reply_repository_impl.dart';
+import '../../domain/entities/post.dart';
+import '../bloc/post_bloc.dart';
+import '../bloc/post_detail_bloc.dart';
 
 class PostDetailPage extends StatelessWidget {
   final Post post;
@@ -62,15 +68,28 @@ class _PostDetailViewState extends State<_PostDetailView> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocListener<PostDetailBloc, PostDetailState>(
-      listenWhen: (prev, next) => prev.message != next.message && next.message != null,
-      listener: (context, state) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(state.message!)),
-        );
-        context.read<PostDetailBloc>().add(ClearMessage());
+    return BlocListener<PostBloc, PostState>(
+      listenWhen: (prev, next) => next is PostLoaded,
+      listener: (context, postState) {
+        if (postState is! PostLoaded) return;
+        final detailBloc = context.read<PostDetailBloc>();
+        final currentPostId = detailBloc.state.post.id;
+        final updated = postState.posts.where((p) => p.id == currentPostId).firstOrNull;
+        final current = detailBloc.state.post;
+        if (updated != null &&
+            (updated.likeCount != current.likeCount || updated.isLikedByMe != current.isLikedByMe)) {
+          detailBloc.add(InitPostDetail(updated));
+        }
       },
-      child: BlocBuilder<PostDetailBloc, PostDetailState>(
+      child: BlocListener<PostDetailBloc, PostDetailState>(
+        listenWhen: (prev, next) => prev.message != next.message && next.message != null,
+        listener: (context, state) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(state.message!)),
+          );
+          context.read<PostDetailBloc>().add(ClearMessage());
+        },
+        child: BlocBuilder<PostDetailBloc, PostDetailState>(
         builder: (context, state) {
           final detailBloc = context.read<PostDetailBloc>();
 
@@ -87,6 +106,9 @@ class _PostDetailViewState extends State<_PostDetailView> {
                 if (state.isMine && state.isEditing)
                   TextButton(
                     onPressed: () {
+                      final imageUrl = state.editingImageUrl == null
+                          ? state.post.imageUrl
+                          : (state.editingImageUrl!.isEmpty ? null : state.editingImageUrl);
                       final updated = Post(
                         id: state.post.id,
                         title: state.title.trim(),
@@ -94,6 +116,7 @@ class _PostDetailViewState extends State<_PostDetailView> {
                         type: state.type,
                         author: state.post.author,
                         createdAt: state.post.createdAt,
+                        imageUrl: imageUrl,
                       );
 
                       if (updated.title.isEmpty || updated.content.isEmpty) {
@@ -161,6 +184,7 @@ class _PostDetailViewState extends State<_PostDetailView> {
           );
         },
       ),
+    ),
     );
   }
 }
@@ -206,11 +230,36 @@ class _DetailView extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            '작성자: ${state.post.author}',
-            style: const TextStyle(color: Colors.grey),
+            '작성자: ${state.post.author}  ·  ${formatDateTime(state.post.createdAt)}',
+            style: const TextStyle(color: Colors.grey, fontSize: 14),
           ),
           const Divider(height: 30),
+          if (state.post.imageUrl != null && state.post.imageUrl!.isNotEmpty) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: PostImage(
+                imageUrl: state.post.imageUrl,
+                width: double.infinity,
+                height: 480,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           Text(state.post.content, style: const TextStyle(fontSize: 16)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              IconButton(
+                onPressed: () => context.read<PostBloc>().add(TogglePostLike(state.post)),
+                icon: Icon(
+                  state.post.isLikedByMe ? Icons.favorite : Icons.favorite_border,
+                  color: state.post.isLikedByMe ? Colors.red : null,
+                ),
+              ),
+              if (state.post.likeCount > 0)
+                Text('좋아요 ${state.post.likeCount}', style: const TextStyle(color: Colors.grey)),
+            ],
+          ),
         ],
       ),
     );
@@ -255,7 +304,7 @@ class _ReplySection extends StatelessWidget {
           Row(
             children: [
               Text(
-                '댓글 ${state.replies.length}',
+                '댓글 ${state.totalReplyCount ?? state.replies.length}',
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const Spacer(),
@@ -285,10 +334,34 @@ class _ReplySection extends StatelessWidget {
             return ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: Text(reply.author),
+              title: Row(
+                children: [
+                  Text(reply.author),
+                  if (reply.createdAt != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      formatDateTime(reply.createdAt!),
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ],
+              ),
               subtitle: Text(reply.content),
-              trailing: isMine
-                  ? PopupMenuButton<String>(
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    onPressed: () => bloc.add(ToggleReplyLike(reply)),
+                    icon: Icon(
+                      reply.isLikedByMe ? Icons.favorite : Icons.favorite_border,
+                      size: 20,
+                      color: reply.isLikedByMe ? Colors.red : null,
+                    ),
+                  ),
+                  if (reply.likeCount > 0)
+                    Text('${reply.likeCount}', style: const TextStyle(fontSize: 12)),
+                  if (isMine)
+                    PopupMenuButton<String>(
                       onSelected: (v) async {
                         if (v == 'edit') {
                           bloc.add(StartEditReply(reply));
@@ -318,8 +391,9 @@ class _ReplySection extends StatelessWidget {
                         PopupMenuItem(value: 'edit', child: Text('수정')),
                         PopupMenuItem(value: 'delete', child: Text('삭제')),
                       ],
-                    )
-                  : null,
+                    ),
+                ],
+              ),
             );
           }),
 
@@ -397,9 +471,33 @@ class _EditForm extends StatelessWidget {
   final PostDetailState state;
   const _EditForm({required this.state});
 
+  static const int _maxImageBytes = 3 * 1024 * 1024;
+
+  Future<void> _pickImage(BuildContext context) async {
+    final picker = ImagePicker();
+    final x = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (x == null || !context.mounted) return;
+    final bytes = await x.readAsBytes();
+    if (bytes.length > _maxImageBytes) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('이미지는 3MB 이하여야 해요.')),
+        );
+      }
+      return;
+    }
+    final base64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+    if (context.mounted) {
+      context.read<PostDetailBloc>().add(ChangeEditImage(base64));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bloc = context.read<PostDetailBloc>();
+    final currentImageUrl = state.editingImageUrl == null
+        ? state.post.imageUrl
+        : (state.editingImageUrl!.isEmpty ? null : state.editingImageUrl);
 
     return Column(
       children: [
@@ -420,6 +518,33 @@ class _EditForm extends StatelessWidget {
             border: OutlineInputBorder(),
           ),
         ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => _pickImage(context),
+              icon: const Icon(Icons.add_photo_alternate),
+              label: const Text('이미지 변경'),
+            ),
+          ],
+        ),
+        if (currentImageUrl != null && currentImageUrl.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Stack(
+            alignment: Alignment.topRight,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: PostImage(imageUrl: currentImageUrl, width: double.infinity, height: 280),
+              ),
+              IconButton(
+                onPressed: () => bloc.add(ChangeEditImage('')),
+                icon: const Icon(Icons.close),
+                style: IconButton.styleFrom(backgroundColor: Colors.white70),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 12),
         Expanded(
           child: TextField(

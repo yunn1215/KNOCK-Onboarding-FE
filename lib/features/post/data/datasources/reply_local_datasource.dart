@@ -35,6 +35,11 @@ class ReplyLocalDataSource {
     return filtered.sublist(start, end);
   }
 
+  Future<int> getReplyCount(int postId) async {
+    final all = await _getAll();
+    return all.where((r) => r.postId == postId).length;
+  }
+
   Future<void> upsertReply(ReplyModel reply) async {
     final all = await _getAll();
     final idx = all.indexWhere((r) => r.id == reply.id);

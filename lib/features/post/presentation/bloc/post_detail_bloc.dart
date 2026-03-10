@@ -28,6 +28,11 @@ class ChangeType extends PostDetailEvent {
   ChangeType(this.type);
 }
 
+class ChangeEditImage extends PostDetailEvent {
+  final String? imageUrl; // null = keep, '' = remove
+  ChangeEditImage(this.imageUrl);
+}
+
 class LoadReplies extends PostDetailEvent {
   final bool reset;
   LoadReplies({this.reset = false});
@@ -57,6 +62,11 @@ class DeleteReply extends PostDetailEvent {
   DeleteReply(this.id);
 }
 
+class ToggleReplyLike extends PostDetailEvent {
+  final Reply reply;
+  ToggleReplyLike(this.reply);
+}
+
 class ClearMessage extends PostDetailEvent {}
 
 class PostDetailState extends Equatable {
@@ -71,9 +81,13 @@ class PostDetailState extends Equatable {
   final bool hasMoreReplies;
   final bool isRepliesLoading;
   final bool isReplyActionLoading;
+  /// 총 댓글 수 (상세 진입 시 1페이지 로드 시 서버에서 전달, 스크롤 시에는 유지).
+  final int? totalReplyCount;
 
   final int? editingReplyId;
   final String editingReplyContent;
+
+  final String? editingImageUrl;
 
   final String? message;
 
@@ -90,8 +104,10 @@ class PostDetailState extends Equatable {
     required this.hasMoreReplies,
     required this.isRepliesLoading,
     required this.isReplyActionLoading,
+    this.totalReplyCount,
     required this.editingReplyId,
     required this.editingReplyContent,
+    required this.editingImageUrl,
     required this.message,
   });
 
@@ -106,8 +122,10 @@ class PostDetailState extends Equatable {
     hasMoreReplies: true,
     isRepliesLoading: false,
     isReplyActionLoading: false,
+    totalReplyCount: null,
     editingReplyId: null,
     editingReplyContent: '',
+    editingImageUrl: null,
     message: null,
   );
 
@@ -122,8 +140,10 @@ class PostDetailState extends Equatable {
     bool? hasMoreReplies,
     bool? isRepliesLoading,
     bool? isReplyActionLoading,
+    int? totalReplyCount,
     Object? editingReplyId = _unset,
     String? editingReplyContent,
+    Object? editingImageUrl = _unset,
     Object? message = _unset,
   }) {
     return PostDetailState(
@@ -137,8 +157,10 @@ class PostDetailState extends Equatable {
       hasMoreReplies: hasMoreReplies ?? this.hasMoreReplies,
       isRepliesLoading: isRepliesLoading ?? this.isRepliesLoading,
       isReplyActionLoading: isReplyActionLoading ?? this.isReplyActionLoading,
+      totalReplyCount: totalReplyCount ?? this.totalReplyCount,
       editingReplyId: editingReplyId == _unset ? this.editingReplyId : editingReplyId as int?,
       editingReplyContent: editingReplyContent ?? this.editingReplyContent,
+      editingImageUrl: editingImageUrl == _unset ? this.editingImageUrl : editingImageUrl as String?,
       message: message == _unset ? this.message : message as String?,
     );
   }
@@ -155,8 +177,10 @@ class PostDetailState extends Equatable {
     hasMoreReplies,
     isRepliesLoading,
     isReplyActionLoading,
+    totalReplyCount,
     editingReplyId,
     editingReplyContent,
+    editingImageUrl,
     message,
   ];
 }
@@ -173,6 +197,7 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
     on<ChangeTitle>((e, emit) => emit(state.copyWith(title: e.title)));
     on<ChangeContent>((e, emit) => emit(state.copyWith(content: e.content)));
     on<ChangeType>((e, emit) => emit(state.copyWith(type: e.type)));
+    on<ChangeEditImage>((e, emit) => emit(state.copyWith(editingImageUrl: e.imageUrl)));
     on<LoadReplies>(_onLoadReplies);
     on<CreateReply>(_onCreateReply);
     on<StartEditReply>(_onStartEditReply);
@@ -184,6 +209,7 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
     );
     on<SubmitUpdateReply>(_onSubmitUpdateReply);
     on<DeleteReply>(_onDeleteReply);
+    on<ToggleReplyLike>(_onToggleReplyLike);
     on<ClearMessage>((e, emit) => emit(state.copyWith(message: null)));
 
     add(LoadReplies(reset: true));
@@ -202,6 +228,7 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
           title: state.post.title,
           content: state.post.content,
           type: state.post.type,
+          editingImageUrl: null,
         ),
       );
       return;
@@ -222,11 +249,12 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
         replies: event.reset ? [] : state.replies,
         replyPage: event.reset ? 0 : state.replyPage,
         hasMoreReplies: event.reset ? true : state.hasMoreReplies,
+        totalReplyCount: event.reset ? null : state.totalReplyCount,
       ),
     );
 
     try {
-      final fetched = await replyRepository.getReplies(
+      final (fetched, total) = await replyRepository.getReplies(
         postId: state.post.id,
         page: nextPage,
       );
@@ -237,12 +265,22 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
         ...fetched.where((r) => !existingIds.contains(r.id)),
       ];
 
+      final totalCount = event.reset && total != null
+          ? total
+          : (event.reset && total == null && fetched.length < 10
+              ? fetched.length
+              : state.totalReplyCount);
+      final hasMore = total != null
+          ? merged.length < total
+          : fetched.length == 10;
+
       emit(
         state.copyWith(
           isRepliesLoading: false,
           replies: merged,
           replyPage: nextPage,
-          hasMoreReplies: fetched.length == 10,
+          hasMoreReplies: hasMore,
+          totalReplyCount: totalCount,
         ),
       );
     } catch (_) {
@@ -270,6 +308,7 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
         postId: state.post.id,
         content: text,
         author: 'me',
+        createdAt: DateTime.now(),
       );
       await replyRepository.createReply(reply);
       emit(state.copyWith(isReplyActionLoading: false, message: '댓글이 등록됐어요.'));
@@ -359,15 +398,47 @@ class PostDetailBloc extends Bloc<PostDetailEvent, PostDetailState> {
     try {
       await replyRepository.deleteReply(event.id);
       final updatedReplies = state.replies.where((r) => r.id != event.id).toList();
+      final newTotal = state.totalReplyCount != null
+          ? (state.totalReplyCount! - 1).clamp(0, 0x7fffffff)
+          : null;
       emit(
         state.copyWith(
           isReplyActionLoading: false,
           replies: updatedReplies,
+          totalReplyCount: newTotal,
           message: '댓글이 삭제됐어요.',
         ),
       );
     } catch (_) {
       emit(state.copyWith(isReplyActionLoading: false, message: '댓글 삭제에 실패했어요.'));
+    }
+  }
+
+  Future<void> _onToggleReplyLike(ToggleReplyLike event, Emitter<PostDetailState> emit) async {
+    final idx = state.replies.indexWhere((r) => r.id == event.reply.id);
+    if (idx == -1) return;
+
+    final old = state.replies[idx];
+    final optimisticReply = old.copyWith(
+      likeCount: old.isLikedByMe ? old.likeCount - 1 : old.likeCount + 1,
+      isLikedByMe: !old.isLikedByMe,
+    );
+    final previousReplies = List<Reply>.from(state.replies);
+    final optimisticReplies = List<Reply>.from(state.replies);
+    optimisticReplies[idx] = optimisticReply;
+    emit(state.copyWith(replies: optimisticReplies));
+
+    try {
+      final updated = old.isLikedByMe
+          ? await replyRepository.unlikeReply(event.reply.id)
+          : await replyRepository.likeReply(event.reply.id);
+      final nowReplies = List<Reply>.from(state.replies);
+      if (nowReplies.length > idx && nowReplies[idx].id == event.reply.id) {
+        nowReplies[idx] = updated;
+        emit(state.copyWith(replies: nowReplies));
+      }
+    } catch (_) {
+      emit(state.copyWith(replies: previousReplies));
     }
   }
 }

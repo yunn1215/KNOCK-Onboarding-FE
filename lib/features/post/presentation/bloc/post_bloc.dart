@@ -1,7 +1,6 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/entities/post.dart';
 import '../../data/datasources/post_local_datasource.dart';
-import '../../data/models/post_model.dart';
 import '../../domain/repositories/post_repository.dart';
 
 /// ---------------- EVENTS ----------------
@@ -25,6 +24,11 @@ class UpdatePost extends PostEvent {
   final Post post;
   final String requester; // 수정 시도
   UpdatePost(this.post, {required this.requester});
+}
+
+class TogglePostLike extends PostEvent {
+  final Post post;
+  TogglePostLike(this.post);
 }
 
 /// ---------------- STATES ----------------
@@ -51,6 +55,7 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     on<AddPost>(_onAddPost);
     on<DeletePost>(_onDeletePost);
     on<UpdatePost>(_onUpdatePost);
+    on<TogglePostLike>(_onTogglePostLike);
   }
 
   Future<void> _onLoadPosts(LoadPosts event, Emitter<PostState> emit) async {
@@ -96,7 +101,6 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     final idx = currentState.posts.indexWhere((p) => p.id == event.post.id);
     if (idx == -1) return;
 
-    // 작성자만 수정 가능
     final old = currentState.posts[idx];
     if (old.author != event.requester) return;
 
@@ -105,5 +109,37 @@ class PostBloc extends Bloc<PostEvent, PostState> {
     updatedList[idx] = updated;
 
     emit(PostLoaded(updatedList));
+  }
+
+  Future<void> _onTogglePostLike(TogglePostLike event, Emitter<PostState> emit) async {
+    final currentState = state;
+    if (currentState is! PostLoaded) return;
+
+    final idx = currentState.posts.indexWhere((p) => p.id == event.post.id);
+    if (idx == -1) return;
+
+    final old = currentState.posts[idx];
+    final optimisticPost = old.copyWith(
+      likeCount: old.isLikedByMe ? old.likeCount - 1 : old.likeCount + 1,
+      isLikedByMe: !old.isLikedByMe,
+    );
+    final previousList = List<Post>.from(currentState.posts);
+    final optimisticList = List<Post>.from(currentState.posts);
+    optimisticList[idx] = optimisticPost;
+    emit(PostLoaded(optimisticList));
+
+    try {
+      final updated = old.isLikedByMe
+          ? await repository.unlikePost(event.post.id)
+          : await repository.likePost(event.post.id);
+      final now = state;
+      if (now is PostLoaded && now.posts.length > idx && now.posts[idx].id == event.post.id) {
+        final resultList = List<Post>.from(now.posts);
+        resultList[idx] = updated;
+        emit(PostLoaded(resultList));
+      }
+    } catch (_) {
+      emit(PostLoaded(previousList));
+    }
   }
 }

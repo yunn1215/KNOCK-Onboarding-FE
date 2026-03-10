@@ -31,5 +31,28 @@ class PostRemoteDataSource {
   Future<void> deletePost(int id) async {
     await dio.delete('/posts/$id');
   }
+
+  Future<PostModel> likePost(int id) async {
+    final model = await getPost(id);
+    final newLikedBy = List<String>.from(model.likedBy);
+    if (!newLikedBy.contains('me')) {
+      newLikedBy.add('me');
+    }
+    final body = model.toJson()
+      ..['likeCount'] = newLikedBy.length
+      ..['likedBy'] = newLikedBy;
+    final response = await dio.patch('/posts/$id', data: body);
+    return PostModel.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<PostModel> unlikePost(int id) async {
+    final model = await getPost(id);
+    final newLikedBy = List<String>.from(model.likedBy)..remove('me');
+    final body = model.toJson()
+      ..['likeCount'] = newLikedBy.length
+      ..['likedBy'] = newLikedBy;
+    final response = await dio.patch('/posts/$id', data: body);
+    return PostModel.fromJson(response.data as Map<String, dynamic>);
+  }
 }
 

@@ -6,5 +6,7 @@ abstract class PostRepository {
   Future<Post> createPost(Post post);
   Future<Post> updatePost(Post post);
   Future<void> deletePost(int id);
+  Future<Post> likePost(int id);
+  Future<Post> unlikePost(int id);
 }
 
