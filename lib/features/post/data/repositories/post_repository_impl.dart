@@ -1,4 +1,5 @@
 import '../../domain/entities/post.dart';
+import '../../domain/entities/post_search_filter.dart';
 import '../../domain/repositories/post_repository.dart';
 import '../datasources/post_local_datasource.dart';
 import '../datasources/post_remote_datasource.dart';
@@ -11,14 +12,40 @@ class PostRepositoryImpl implements PostRepository {
   PostRepositoryImpl({required this.remote, required this.local});
 
   @override
-  Future<List<Post>> getPosts() async {
+  Future<List<Post>> getPosts([PostSearchFilter filter = PostSearchFilter.empty]) async {
     try {
-      final posts = await remote.getPosts();
+      final posts = await remote.getPosts(filter);
       await local.savePosts(posts);
       return posts;
     } catch (_) {
-      return await local.getPosts();
+      final all = await local.getPosts();
+      return _applyFilter(all, filter);
     }
+  }
+
+  static List<Post> _applyFilter(List<Post> list, PostSearchFilter filter) {
+    var result = list;
+    final search = filter.search?.trim();
+    if (search != null && search.isNotEmpty) {
+      final lower = search.toLowerCase();
+      result = result.where((p) {
+        return p.title.toLowerCase().contains(lower) ||
+            p.content.toLowerCase().contains(lower);
+      }).toList();
+    }
+    if (filter.type != null && filter.type != 'all') {
+      result = result.where((p) => p.type == filter.type).toList();
+    }
+    if (filter.author != null && filter.author!.isNotEmpty) {
+      result = result.where((p) => p.author == filter.author).toList();
+    }
+    if (filter.dateFrom != null) {
+      result = result.where((p) => p.createdAt.isAfter(filter.dateFrom!) || p.createdAt.isAtSameMomentAs(filter.dateFrom!)).toList();
+    }
+    if (filter.dateTo != null) {
+      result = result.where((p) => p.createdAt.isBefore(filter.dateTo!) || p.createdAt.isAtSameMomentAs(filter.dateTo!)).toList();
+    }
+    return result;
   }
 
   @override

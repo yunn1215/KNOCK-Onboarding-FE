@@ -10,28 +10,17 @@ import '../../data/datasources/post_local_datasource.dart';
 import '../../data/datasources/post_remote_datasource.dart';
 import '../../data/repositories/post_repository_impl.dart';
 import '../../domain/entities/post.dart';
+import '../../domain/entities/post_search_filter.dart';
 import '../bloc/post_bloc.dart';
+import '../widgets/post_filter_sheet.dart';
 import 'post_create_page.dart';
 import 'post_detail_page.dart';
 
-class PostListPage extends StatefulWidget {
+/// 검색 디바운스 목표: 300ms (±50ms).
+const Duration kSearchDebounceDuration = Duration(milliseconds: 300);
+
+class PostListPage extends StatelessWidget {
   const PostListPage({super.key});
-
-  @override
-  State<PostListPage> createState() => _PostListPageState();
-}
-
-class _PostListPageState extends State<PostListPage> {
-  String _filter = 'all';
-  Completer<void>? _refreshCompleter;
-
-  String _typeLabel(String type) => type == 'question' ? '질문' : '일반';
-
-  Future<void> _onRefresh() async {
-    _refreshCompleter = Completer<void>();
-    context.read<PostBloc>().add(LoadPosts());
-    await _refreshCompleter!.future;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,127 +33,205 @@ class _PostListPageState extends State<PostListPage> {
         );
         return PostBloc(repository: repository)..add(LoadPosts());
       },
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Knock'),
-          actions: const [
-            Icon(Icons.search),
-            SizedBox(width: 12),
-            Icon(Icons.tune),
-            SizedBox(width: 12),
-          ],
-        ),
-        body: BlocListener<PostBloc, PostState>(
-          listenWhen: (prev, next) => next is PostLoaded,
-          listener: (context, state) {
-            _refreshCompleter?.complete();
-            _refreshCompleter = null;
-          },
-          child: BlocBuilder<PostBloc, PostState>(
-            builder: (context, state) {
-              if (state is! PostLoaded) {
-                return const Center(child: CircularProgressIndicator());
-              }
+      child: const _PostListScaffold(),
+    );
+  }
+}
 
-              final posts = state.posts;
-              final filtered = _filter == 'all'
-                  ? posts
-                  : posts.where((p) => p.type == _filter).toList();
-              final reversed = filtered.reversed.toList();
+class _PostListScaffold extends StatefulWidget {
+  const _PostListScaffold();
 
-              return Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(value: 'all', label: Text('전체')),
-                        ButtonSegment(value: 'post', label: Text('게시글')),
-                        ButtonSegment(value: 'question', label: Text('질문')),
-                      ],
-                      selected: {_filter},
-                      onSelectionChanged: (s) =>
-                          setState(() => _filter = s.first),
-                    ),
-                  ),
-                  Expanded(
-                    child: RefreshIndicator(
-                      onRefresh: _onRefresh,
-                      child: reversed.isEmpty
-                          ? const SingleChildScrollView(
-                              physics: AlwaysScrollableScrollPhysics(),
-                              child: SizedBox(
-                                height: 200,
-                                child: Center(child: Text('게시글이 없습니다')),
-                              ),
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                              itemCount: reversed.length,
-                              separatorBuilder: (context, _) =>
-                                  const SizedBox(height: 12),
-                              itemBuilder: (context, i) {
-                                final Post p = reversed[i];
-                                return GestureDetector(
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => BlocProvider.value(
-                                          value: context.read<PostBloc>(),
-                                          child: PostDetailPage(post: p),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: _PostCard(
-                                    post: p,
-                                    typeLabel: _typeLabel(p.type),
-                                    onLike: () =>
-                                        context.read<PostBloc>().add(TogglePostLike(p)),
-                                    onDelete: () {
-                                      if (p.author != 'me') {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(
-                                            content: Text('작성자만 삭제할 수 있어요'),
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                      context.read<PostBloc>().add(
-                                            DeletePost(p.id, requester: 'me'),
-                                          );
-                                    },
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                  ),
-                ],
-              );
+  @override
+  State<_PostListScaffold> createState() => _PostListScaffoldState();
+}
+
+class _PostListScaffoldState extends State<_PostListScaffold> {
+  Completer<void>? _refreshCompleter;
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _debounceTimer;
+  bool _searchExpanded = false;
+
+  String _typeLabel(String type) => type == 'question' ? '질문' : '일반';
+
+  void _onSearchChanged(String value) {
+    final trimmed = value.trim();
+
+    // 검색어를 "지우는 만큼" 바로 취소되게: 빈 문자열이 되는 순간 즉시 해제.
+    if (trimmed.isEmpty) {
+      _debounceTimer?.cancel();
+      final state = context.read<PostBloc>().state;
+      final filter = state is PostLoaded
+          ? state.appliedFilter.copyWith(clearSearch: true)
+          : PostSearchFilter.empty;
+      context.read<PostBloc>().add(LoadPosts(filter));
+      return;
+    }
+
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(kSearchDebounceDuration, () {
+      final state = context.read<PostBloc>().state;
+      final filter = state is PostLoaded
+          ? state.appliedFilter.copyWith(search: trimmed)
+          : PostSearchFilter(search: trimmed);
+      context.read<PostBloc>().add(LoadPosts(filter));
+    });
+  }
+
+  Future<void> _onRefresh() async {
+    _refreshCompleter = Completer<void>();
+    final state = context.read<PostBloc>().state;
+    final filter = state is PostLoaded ? state.appliedFilter : PostSearchFilter.empty;
+    context.read<PostBloc>().add(LoadPosts(filter));
+    await _refreshCompleter!.future;
+  }
+
+  Future<void> _openFilter() async {
+    final state = context.read<PostBloc>().state;
+    final initial = state is PostLoaded ? state.appliedFilter : PostSearchFilter.empty;
+    final result = await showModalBottomSheet<PostSearchFilter>(
+      context: context,
+      builder: (ctx) => PostFilterSheet(initial: initial),
+    );
+    if (result != null && context.mounted) {
+      final f = result.copyWith(search: _searchController.text.trim().isEmpty ? null : _searchController.text.trim());
+      context.read<PostBloc>().add(LoadPosts(f));
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: _searchExpanded
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: '제목·내용 검색',
+                  border: InputBorder.none,
+                ),
+                onChanged: _onSearchChanged,
+              )
+            : const Text('Knock'),
+        actions: [
+          IconButton(
+            tooltip: _searchExpanded ? '검색 닫기' : '검색',
+            icon: Icon(_searchExpanded ? Icons.close : Icons.search),
+            onPressed: () {
+              setState(() {
+                _searchExpanded = !_searchExpanded;
+                if (!_searchExpanded) {
+                  _searchController.clear();
+                  _debounceTimer?.cancel();
+                  final state = context.read<PostBloc>().state;
+                  final filter = state is PostLoaded
+                      ? state.appliedFilter.copyWith(clearSearch: true)
+                      : PostSearchFilter.empty;
+                  context.read<PostBloc>().add(LoadPosts(filter));
+                }
+              });
             },
           ),
-        ),
-        floatingActionButton: Builder(
-          builder: (context) {
-            return FloatingActionButton.extended(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<PostBloc>(),
-                      child: const PostCreatePage(),
+          IconButton(
+            tooltip: '필터',
+            icon: const Icon(Icons.tune),
+            onPressed: _openFilter,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+      body: BlocListener<PostBloc, PostState>(
+        listenWhen: (prev, next) => next is PostLoaded,
+        listener: (context, state) {
+          _refreshCompleter?.complete();
+          _refreshCompleter = null;
+        },
+        child: BlocBuilder<PostBloc, PostState>(
+          builder: (context, state) {
+            if (state is! PostLoaded) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final posts = state.posts;
+
+            return RefreshIndicator(
+              onRefresh: _onRefresh,
+              child: posts.isEmpty
+                  ? const SingleChildScrollView(
+                      physics: AlwaysScrollableScrollPhysics(),
+                      child: SizedBox(
+                        height: 200,
+                        child: Center(child: Text('게시글이 없습니다')),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      itemCount: posts.length,
+                      separatorBuilder: (context, _) =>
+                          const SizedBox(height: 12),
+                      itemBuilder: (context, i) {
+                        // Avoid allocating a reversed copy on every rebuild.
+                        final index = posts.length - 1 - i;
+                        final Post p = posts[index];
+                        return GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => BlocProvider.value(
+                                  value: context.read<PostBloc>(),
+                                  child: PostDetailPage(post: p),
+                                ),
+                              ),
+                            );
+                          },
+                          child: _PostCard(
+                            post: p,
+                            typeLabel: _typeLabel(p.type),
+                            onLike: () =>
+                                context.read<PostBloc>().add(TogglePostLike(p)),
+                            onDelete: () {
+                              if (p.author != 'me') {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('작성자만 삭제할 수 있어요'),
+                                  ),
+                                );
+                                return;
+                              }
+                              context.read<PostBloc>().add(
+                                    DeletePost(p.id, requester: 'me'),
+                                  );
+                            },
+                          ),
+                        );
+                      },
                     ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.edit),
-              label: const Text('새 게시글 작성'),
             );
           },
         ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BlocProvider.value(
+                value: context.read<PostBloc>(),
+                child: const PostCreatePage(),
+              ),
+            ),
+          );
+        },
+        icon: const Icon(Icons.edit),
+        label: const Text('새 게시글 작성'),
       ),
     );
   }
@@ -189,7 +256,7 @@ class _PostCard extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
         boxShadow: const [
           BoxShadow(
             blurRadius: 12,
